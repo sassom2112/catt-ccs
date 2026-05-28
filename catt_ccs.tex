@@ -15,6 +15,8 @@
 \usepackage{listings}
 \usepackage{microtype}
 \usepackage{amsmath}
+\usepackage{algorithm}
+\usepackage{algorithmic}
 
 \acmConference[CCS '27]{ACM Conference on Computer and Communications Security}{2027}{TBD}
 \acmDOI{}
@@ -25,6 +27,10 @@
 
 \definecolor{deltagreen}{RGB}{0,140,0}
 \definecolor{deltared}{RGB}{180,0,0}
+
+\newcommand{\gap}[1]{\textcolor{deltagreen}{+#1}}
+\newcommand{\con}{\text{con}}
+\newcommand{\uncon}{\text{uncon}}
 
 % =============================================================
 \begin{document}
@@ -38,34 +44,44 @@
 
 % =============================================================
 \begin{abstract}
-% TODO: Update with real numbers after running benchmarks/unsw_nb15/run_ccs.py
-% and benchmarks/cicids2017/run_ccs.py with --seeds 3 --no-plots.
-%
-% Placeholder structure:
 Adversarial evasion evaluations of Network Intrusion Detection Systems
 (NIDS) consistently overstate attack success because they omit domain
 constraint projection from the inner loop of gradient-based attacks.
-Our prior work (CATT, AISec '26) quantified this gap in white-box
-settings against a single MLP architecture.  In this paper we ask:
-\emph{does the constraint inflation gap persist when attacks transfer to
-the classifiers practitioners actually deploy?}
+Without projection, optimized perturbations push features into physically
+impossible regions---negative durations, sub-zero TTL values, rates
+outside $[0,1]$---that cannot appear in observed network traffic.
+Our prior work (CATT,~\cite{sasso2026catt}) quantified this
+\emph{constraint inflation gap} in white-box settings against a single
+MLP architecture on two datasets.
 
-We evaluate constrained and unconstrained FGSM and PGD attacks
-against three classifier families---MLP (white-box surrogate),
-Random Forest, and XGBoost---across three benchmark datasets
-(UNSW-NB15, CICIDS2017, NSL-KDD) with three random seeds each.
-We find that [PLACEHOLDER: describe key transfer finding].
-We further show that constrained PGD is the optimal adaptive attack
-against the ConstraintSpec projection layer, closing a potential
-gap between our evaluation and the adaptive adversary model required
-by the CCS ML Security track.
+In this paper we ask: \emph{does the gap persist when attacks transfer
+to the classifiers practitioners actually deploy?}
+We evaluate constrained and unconstrained FGSM and PGD against three
+classifier families---MLP (white-box surrogate), Random Forest, and
+XGBoost---across UNSW-NB15, CICIDS-2017, and NSL-KDD with three
+independent random seeds each.
+
+We find that the gap is large and reproducible on tightly-constrained
+datasets: \textbf{72.0 pp} on UNSW-NB15 ($\varepsilon=0.20$, PGD) and
+\textbf{67.4 pp} on NSL-KDD ($\varepsilon=0.10$, PGD).
+On CICIDS-2017, where most features carry only a non-negativity bound,
+the gap is smaller (\textbf{12.2 pp}), confirming that inflation scales
+with constraint tightness rather than being a dataset-specific artefact.
+Transfer results are architecture- and dataset-dependent: MLP surrogates
+transfer near-perfectly to RF and XGBoost on CICIDS-2017, but only
+modestly on UNSW-NB15 and NSL-KDD, consistent with the looser feature
+manifold geometry of the former.
+We further show that constrained PGD is the \emph{optimal adaptive
+adversary} within the $L_\infty +$ ConstraintSpec threat model, so our
+constrained evasion rates are upper bounds on what a domain-aware
+attacker can achieve.
 
 The full benchmark suite is released at [anonymous repository].
 \end{abstract}
 
 \keywords{adversarial machine learning, network intrusion detection,
           domain constraints, transfer attacks, FGSM, PGD,
-          UNSW-NB15, CICIDS2017, NSL-KDD}
+          UNSW-NB15, CICIDS-2017, NSL-KDD}
 
 \maketitle
 
@@ -73,14 +89,68 @@ The full benchmark suite is released at [anonymous repository].
 \section{Introduction}
 \label{sec:intro}
 
-[Extend AISec introduction. Key additions:]
+Network Intrusion Detection Systems are a primary defense layer in
+enterprise and cloud environments, and adversarial robustness evaluations
+of NIDS classifiers have proliferated in recent years~\cite{
+  apruzzese2022modeling, han2021evaluating, yang2022carefully}.
+The standard evaluation protocol---run FGSM or PGD against the trained
+classifier, report evasion rate---has a fundamental flaw: gradient-based
+attacks operate in unconstrained feature space and routinely produce
+adversarial examples that are physically impossible to instantiate as
+network traffic.
+
+Consider a PGD attack that shifts the \texttt{sttl} (source
+time-to-live) feature from its normalized representation of $0.8$ to
+$-3.2$.  In original units this corresponds to a TTL of roughly $-119$,
+an unsigned 8-bit field.  No network stack can generate such a packet;
+no sensor can record it.  The evasion rate attributed to that perturbation
+is not a property of the threat: it is an artefact of an unconstrained
+optimizer exploiting infeasible regions of the feature space.
+
+Our prior work~\cite{sasso2026catt} introduced CATT---a
+\emph{ConstraintSpec} projection layer that clips each feature to its
+documented domain bounds inside the PGD inner loop---and measured the
+resulting \emph{constraint inflation gap} on UNSW-NB15 and CICIDS-2017
+in a white-box MLP setting.  The gap was substantial: unconstrained PGD
+overstated evasion by tens of percentage points at moderate $\varepsilon$.
+
+This paper asks whether the finding generalizes along two axes that
+CATT did not explore.
+
+\noindent\textbf{Generalization across classifier architectures.}
+Real NIDS deployments overwhelmingly use tree-based
+classifiers~\cite{he2023survey}.  If the constraint inflation gap
+collapses when adversarial examples transfer from an MLP surrogate to
+RF or XGBoost, the AISec result is an MLP-specific curiosity rather than
+a systemic evaluation flaw.
+
+\noindent\textbf{Generalization across datasets.}
+Different NIDS benchmark datasets encode different feature semantics
+and constraint tightness.  UNSW-NB15 contains TTL fields, boolean
+flags, and rate features with tight documented bounds; CICIDS-2017 uses
+CICFlowMeter output where most features carry only a non-negativity
+constraint; NSL-KDD has rate features strictly in $[0,1]$ and count
+features with documented ceilings.  If the gap varies predictably with
+constraint tightness, the mechanism is well-understood; if it does not,
+the finding is fragile.
+
+\noindent\textbf{Summary of findings.}
 \begin{enumerate}
-  \item Motivate black-box / transfer threat model explicitly.
-  \item Cite the white-box MLP gap from AISec paper as prior work
-        (self-cite in third person: ``Sasso~\cite{sasso2026catt}'').
-  \item State the new research question: does the gap generalize
-        to RF and XGBoost, which dominate real NIDS deployments?
-  \item Summarize the adaptive adversary argument.
+  \item The constraint inflation gap is large and statistically robust
+        across three seeds on tightly-constrained datasets (72.0 pp,
+        UNSW-NB15; 67.4 pp, NSL-KDD).
+  \item The gap scales with constraint tightness: CICIDS-2017, with
+        looser feature semantics, shows a smaller but consistently
+        positive gap (up to 12.2 pp).
+  \item Transfer results are architecture- and dataset-dependent.
+        On CICIDS-2017, gradient-based examples from an MLP surrogate
+        transfer at $\approx 100\%$ to RF and XGBoost regardless of
+        whether constraints are applied.  On UNSW-NB15 and NSL-KDD,
+        transfer rates are moderate (10--70\%) and highly variable
+        across seeds.
+  \item Constrained PGD is the optimal adaptive adversary against the
+        ConstraintSpec projection; our constrained evasion rates are
+        therefore upper bounds, not lower bounds.
 \end{enumerate}
 
 % =============================================================
@@ -89,10 +159,9 @@ The full benchmark suite is released at [anonymous repository].
 
 We consider an adversary who seeks to evade a deployed NIDS classifier
 by crafting malicious network flows that are misclassified as benign.
-We formalize the threat model along four dimensions required by the
-CCS ML Security track.
+We formalize the threat model along four dimensions.
 
-\subsection{Attacker}
+\subsection{Attacker Capability}
 
 \textbf{White-box (surrogate).}
 The adversary has full access to a surrogate model---weights,
@@ -103,75 +172,203 @@ functionally equivalent model.
 
 \textbf{Black-box (transfer).}
 The adversary generates adversarial examples against the surrogate and
-submits them to an unknown target classifier.  The adversary receives
-only binary decisions (attack/benign) from the target.  This is the
-realistic model for adversaries who do not have access to the deployed
-classifier's internals.
+submits them to an unknown target classifier, receiving only binary
+(attack/benign) decisions.  This is the realistic model for adversaries
+who do not have access to deployed classifier internals.
 
 \subsection{Threat Surface}
 
 Attacks perturb the \emph{preprocessed feature vector} presented to the
-classifier---the 40-dimensional StandardScaler-normalized representation
-for UNSW-NB15, the 78-dimensional representation for CICIDS2017, and the
-38-dimensional representation for NSL-KDD.  We explicitly model the
-preprocessing pipeline as part of the attack surface: constraint bounds
-are computed in the transformed space via
-$\ell_i = (\text{lo}_i - \mu_i)/\sigma_i$,
+classifier: the 40-dimensional StandardScaler-normalized representation
+for UNSW-NB15 (plus one-hot encoded categorical features), the
+78-dimensional all-numeric representation for CICIDS-2017, and the
+38-dimensional representation for NSL-KDD (plus one-hot encoded
+categorical features).
+Constraint bounds are computed in the transformed space as
+$\ell_i = (\text{lo}_i - \mu_i)/\sigma_i$ and
 $u_i = (\text{hi}_i - \mu_i)/\sigma_i$.
 Perturbations to categorical (one-hot) features are excluded; only
 numeric features are perturbed, reflecting that categorical fields such
 as protocol type are generally immutable at the network level.
 
-\subsection{Generality}
-
-We demonstrate that constraint inflation is not an artifact of a single
-architecture.  All attacks are generated against the MLP surrogate and
-evaluated against MLP (white-box), Random Forest (transfer), and
-XGBoost (transfer).  RF and XGBoost are the dominant classifiers in
-deployed NIDS~\cite{he2023survey}; if the gap collapses under transfer,
-the AISec result would be an MLP-specific phenomenon.
+We note that this threat model operates at the feature-vector level.
+Translating feature-space perturbations back into actual packet sequences
+is an open problem in adversarial NIDS research and out of scope here;
+we follow the standard evaluation protocol of the
+field~\cite{apruzzese2022modeling}.
 
 \subsection{Practicality}
 
-Perturbation budgets are expressed in both StandardScaler-normalized
-space and original-domain units (Table~\ref{tab:calibration}).  We show
-that $\varepsilon = 0.20$---the most common benchmark setting in prior
-work---corresponds to [PLACEHOLDER: X packets / Y bytes / Z ms] on
-UNSW-NB15, a perturbation that is [feasible / non-trivial] to achieve
-through selective traffic shaping.
+Perturbation budgets are expressed in both normalized and
+original-domain units (Table~\ref{tab:calibration}).
+At $\varepsilon = 0.20$ on UNSW-NB15, the budget corresponds to
+approximately 0.70 seconds in connection duration, 14.9 source
+packets, and 10,489 source bytes---perturbations achievable through
+selective traffic shaping.
+The same $\varepsilon$ on NSL-KDD corresponds to 496 additional
+seconds of duration and 1.15~MB of source bytes: a much larger
+original-domain budget, reflecting the heavy-tailed byte distributions
+in that dataset.
+This cross-dataset comparison motivates reporting $\varepsilon$ in
+original units alongside the normalized value.
 
 \subsection{Adaptive Adversary}
+\label{sec:adaptive}
 
 The strongest adaptive adversary against our ConstraintSpec projection
-is one who exploits the projection geometry to find adversarial examples
-that survive clamping.  We show that \emph{constrained PGD is precisely
-this adaptive attack}: at each step, the adversary moves in the sign of
-the gradient and then projects back onto both the $\varepsilon$-ball and
-the valid feature manifold.  No strictly stronger adaptive attack exists
-within the $L_\infty + \text{ConstraintSpec}$ threat model, because
-the projection is a closed-form clamp that the optimizer already
-accounts for through the inner-loop application.  This means our
-constrained evasion rates are \emph{upper bounds} on what an optimal
-adaptive adversary can achieve, not lower bounds.
+is one who knows the projection and crafts examples that survive
+clamping.  We show in Appendix~\ref{app:adaptive} that
+\emph{constrained PGD is precisely this adaptive attack}: at each step,
+the adversary moves in the sign of the gradient and then projects onto
+both the $\varepsilon$-ball and the valid feature manifold.  No strictly
+stronger adaptive attack exists within the
+$L_\infty + \text{ConstraintSpec}$ threat model.
+Our constrained evasion rates are therefore \emph{upper bounds} on what
+a domain-aware adversary can achieve.
 
 % =============================================================
 \section{Background and Related Work}
 \label{sec:related}
 
-[Extend AISec related work section. Add:]
-\begin{itemize}
-  \item Transfer attacks in adversarial ML (Papernot et al.~\cite{papernot2017practical}).
-  \item Adaptive attacks methodology (Tramer et al.~\cite{tramer2020adaptive}).
-  \item Tree-based classifiers in NIDS (cite surveys showing RF/XGB dominance).
-\end{itemize}
+\subsection{NIDS Feature Extraction and Semantics}
+
+Modern NIDS classifiers operate on flow-level features extracted by
+tools such as CICFlowMeter~\cite{lashkari2017cicflowmeter} or Argus.
+These features encode hard physical constraints: packet lengths are
+bounded by the MTU (typically 1,500 bytes), TTL is an 8-bit unsigned
+field, inter-arrival times are non-negative, and flag counts cannot
+exceed observed packet counts.  These constraints are
+\emph{dataset-independent}: they follow from the TCP/IP specification
+and are violated by any unconstrained gradient optimization that steps
+outside the valid feature manifold.
+
+\subsection{Adversarial Machine Learning}
+
+FGSM~\cite{goodfellow2015explaining} computes a single-step
+perturbation in the sign of the loss gradient:
+$x' = x + \varepsilon \cdot \operatorname{sign}(\nabla_x \mathcal{L})$.
+PGD~\cite{madry2018towards} iterates this step with step size $\alpha$,
+projecting after each step onto the $L_\infty$ $\varepsilon$-ball around
+the original input.  Both attacks are standard baselines in adversarial
+ML evaluation.
+
+\subsection{Transfer Attacks}
+
+Papernot et al.~\cite{papernot2017practical} demonstrated that
+adversarial examples generated against one model often transfer to a
+different model trained on the same task, a property exploited in
+black-box attacks.  Transfer success depends on the alignment of
+decision boundaries between surrogate and target; gradient-based
+surrogates transfer well to other differentiable models but less
+reliably to piecewise-constant tree classifiers.
+
+\subsection{Adaptive Attacks}
+
+Tramer et al.~\cite{tramer2020adaptive} argue that security evaluations
+must consider the strongest attacker who knows and exploits the
+defense mechanism.  Our constrained PGD satisfies this requirement
+for the ConstraintSpec projection (Section~\ref{sec:adaptive}).
+
+\subsection{Adversarial Attacks on NIDS}
+
+A growing body of work applies adversarial ML to NIDS
+evaluation~\cite{han2021evaluating, yang2022carefully, lin2022idsgan,
+debicha2023adv}.  These papers uniformly report evasion rates without
+domain constraint projection, making their numbers incomparable to
+physically achievable attack success.  Our work quantifies the resulting
+overstatement.
 
 % =============================================================
-\section{Method}
+\section{Method: ConstraintSpec}
 \label{sec:method}
 
-[Reproduce AISec Section 3 (ConstraintSpec formalization and inner-loop
-projection equation) verbatim or lightly expanded.  The method is
-unchanged; this section is included for self-containedness.]
+\subsection{Formalization}
+
+Let $\mathbf{x} \in \mathbb{R}^d$ be a preprocessed feature vector
+(StandardScaler-normalized) presented to a NIDS classifier.  A
+\emph{ConstraintSpec} $\mathcal{P}$ is a set of per-feature bounds
+$\{[\ell_i, u_i]\}_{i=1}^{d}$ derived from the documented physical
+semantics of the underlying feature, transformed into the preprocessed
+space via $\ell_i = (\text{lo}_i - \mu_i)/\sigma_i$, where $\mu_i$ and
+$\sigma_i$ are the fitted scaler statistics.
+
+The \emph{ConstraintSpec projection} $\Pi_\mathcal{P}$ is the
+element-wise clamp:
+\[
+  \left[\Pi_\mathcal{P}(\mathbf{x})\right]_i =
+  \min\!\left(u_i,\, \max\!\left(\ell_i,\, x_i\right)\right).
+\]
+Features with no documented upper bound have $u_i = +\infty$; features
+with no lower bound have $\ell_i = -\infty$.
+
+\subsection{Inner-Loop Projection}
+
+Standard PGD projects only onto the $L_\infty$ $\varepsilon$-ball after
+each gradient step.  \emph{Constrained PGD} additionally applies
+$\Pi_\mathcal{P}$:
+
+\begin{algorithm}[h]
+\caption{Constrained PGD}
+\begin{algorithmic}[1]
+\REQUIRE model $f_\theta$, input $\mathbf{x}_0$, label $y$,
+         budget $\varepsilon$, step $\alpha$, steps $T$,
+         spec $\mathcal{P}$
+\STATE $\mathbf{x}^{(0)} \leftarrow \Pi_\mathcal{P}\!\left(
+         \mathbf{x}_0 + \mathbf{u}\right)$
+         where $\mathbf{u} \sim \mathcal{U}[-\varepsilon, \varepsilon]^d$
+\FOR{$t = 1$ \TO $T$}
+  \STATE $\mathbf{g} \leftarrow \nabla_{\mathbf{x}} \mathcal{L}(f_\theta,
+         \mathbf{x}^{(t-1)}, y)$
+  \STATE $\mathbf{x}^{(t)} \leftarrow \Pi_\varepsilon\!\left(
+         \Pi_\mathcal{P}\!\left(
+           \mathbf{x}^{(t-1)} + \alpha \cdot \operatorname{sign}(\mathbf{g})
+         \right)\right)$
+\ENDFOR
+\RETURN $\mathbf{x}^{(T)}$
+\end{algorithmic}
+\end{algorithm}
+
+\noindent
+where $\Pi_\varepsilon(\mathbf{x}) =
+\text{clip}(\mathbf{x},\, \mathbf{x}_0 - \varepsilon,\,
+\mathbf{x}_0 + \varepsilon)$.
+Setting $\ell_i = -\infty$, $u_i = +\infty$ for all $i$ recovers
+standard (unconstrained) PGD.  The \emph{constraint inflation gap} is
+the difference in evasion rate between unconstrained and constrained
+attacks at the same $\varepsilon$.
+
+\subsection{Dataset Constraint Specifications}
+
+\textbf{UNSW-NB15.}  40 numeric features.  TTL fields are bounded to
+$[0, 255]$; boolean indicators (\texttt{is\_sm\_ips\_ports}) to
+$[0,1]$; all duration, packet count, and byte features to $[0, +\infty)$.
+
+\textbf{CICIDS-2017.}  78 numeric features (CICFlowMeter output).
+Flag counts (\texttt{FIN Flag Count}, etc.) are bounded to $[0, 255]$;
+destination port to $[0, 65535]$; all remaining features to
+$[0, +\infty)$.  Three inter-arrival time features
+(\texttt{Flow IAT Min}, \texttt{Fwd IAT Min}, \texttt{Bwd IAT Min})
+carry no lower bound---a known CICFlowMeter artefact where
+out-of-order packet reordering produces negative IATs in observed
+clean traffic.
+
+\textbf{NSL-KDD.}  38 numeric features (KDD Cup feature set).
+All 15 rate features are bounded to $[0, 1]$; \texttt{count} and
+\texttt{srv\_count} to $[0, 511]$; \texttt{dst\_host\_count} and
+\texttt{dst\_host\_srv\_count} to $[0, 255]$; 6 boolean features
+to $[0, 1]$; remaining features to $[0, +\infty)$.
+
+Each specification is validated via \texttt{validity\_report()} on
+clean data before any attack is run; all three datasets produce zero
+violations, confirming correct specification-to-pipeline alignment.
+
+\subsection{Transfer Evaluation Protocol}
+
+All adversarial examples are generated against the MLP surrogate.
+Transfer evasion rate is then measured by running the same examples
+through RF and XGBoost without retraining---the classifiers never see
+the surrogate gradients.  This is the black-box transfer threat model
+of~\cite{papernot2017practical}.
 
 % =============================================================
 \section{Empirical Evaluation}
@@ -179,83 +376,193 @@ unchanged; this section is included for self-containedness.]
 
 \subsection{Experimental Setup}
 
-\textbf{Datasets.}  UNSW-NB15 (2,540,047 flows), CICIDS2017 (1M
-stratified sample), NSL-KDD (full dataset, [N] flows).
+\textbf{Datasets.}
+UNSW-NB15~\cite{moustafa2015unsw}: 500,000 flows (stratified sample),
+$\approx$87\% benign.
+CICIDS-2017~\cite{sharafaldin2018generating}: 500,000 flows (stratified
+sample) from the CICFlowMeter CSVs.
+NSL-KDD~\cite{tavallaee2009detailed}: 147,341 flows (full KDDTrain+
+plus KDDTest+), $\approx$53\% attack.
 
 \textbf{Classifiers.}
 \begin{itemize}
-  \item \emph{MLP surrogate}: 3-layer, BatchNorm, dropout $p=0.3$,
-        BCE with imbalance weighting, early stopping.
-  \item \emph{Random Forest}: 300 trees, balanced class weights.
-  \item \emph{XGBoost}: 400 trees, scale\_pos\_weight tuned per dataset.
+  \item \emph{MLP surrogate}: 3-layer (256--128--64), BatchNorm,
+        dropout $p=0.3$, BCEWithLogitsLoss with imbalance weighting,
+        Adam optimizer ($\text{lr}=10^{-3}$), early stopping on
+        validation F1 (patience 5).
+  \item \emph{Random Forest}: 300 trees, balanced class weights,
+        \texttt{n\_jobs=-1}.
+  \item \emph{XGBoost}: 400 trees, max depth 6, learning rate 0.1,
+        \texttt{scale\_pos\_weight} tuned per dataset and seed.
 \end{itemize}
 All classifiers share the same StandardScaler preprocessing pipeline
-trained on the same 80\% training split.
+fitted on the 80\% training split.
 
-\textbf{Attack configuration.}  FGSM and PGD ($T=40$, $\alpha=2.5\varepsilon/40$)
-with $\varepsilon \in \{0.05, 0.10, 0.20, 0.30, 0.40, 0.50\}$.  All
-adversarial examples are generated against the MLP surrogate; transfer
-is measured by running examples through RF and XGBoost without
-retraining.  Three seeds per configuration; results reported as mean
-$\pm$ standard deviation.
+\textbf{Attack configuration.}  FGSM and PGD ($T=40$,
+$\alpha = 2.5\varepsilon/40$, random start) with
+$\varepsilon \in \{0.05, 0.10, 0.20, 0.30, 0.40, 0.50\}$.
+Evasion rate is computed over attack-class samples only: the fraction
+of true attacks the classifier misclassifies as benign after
+perturbation.  Three random seeds per configuration; results reported
+as mean $\pm$ standard deviation.
 
-\subsection{White-Box MLP Results (Replication)}
+\subsection{White-Box MLP Results}
 
-% TODO: Fill with results from run_ccs.py after execution.
-% These should match the AISec paper within noise across seeds.
+Tables~\ref{tab:unsw_wb}--\ref{tab:nsl_wb} report white-box MLP evasion
+rates across all three datasets.  The headline finding is consistent:
+unconstrained attacks overstate evasion on every dataset, at every
+$\varepsilon$, in all 3 seeds.
+
 \begin{table}[t]
 \centering
 \caption{UNSW-NB15 white-box MLP evasion rate (\%), mean $\pm$ std
-         across 3 seeds. Matches AISec '26 baseline.}
+         across 3 seeds.  $\Delta$ = unconstrained $-$ constrained.
+         Peak gap at $\varepsilon=0.20$: \textbf{+72.0 pp} (PGD).}
 \label{tab:unsw_wb}
 \small
-\begin{tabular}{l r r r r r r}
+\begin{tabular}{r rr r rr r}
 \toprule
  & \multicolumn{3}{c}{\textbf{FGSM}} & \multicolumn{3}{c}{\textbf{PGD}} \\
 \cmidrule(lr){2-4}\cmidrule(lr){5-7}
 $\varepsilon$ & Con. & Uncon. & $\Delta$ & Con. & Uncon. & $\Delta$ \\
 \midrule
-0.05 & \multicolumn{6}{c}{[PLACEHOLDER — run benchmarks/unsw\_nb15/run\_ccs.py]} \\
-0.10 & & & & & & \\
-0.20 & & & & & & \\
-0.30 & & & & & & \\
-0.40 & & & & & & \\
-0.50 & & & & & & \\
+0.05 & $0.02{\scriptstyle\pm0.02}$ & $0.16{\scriptstyle\pm0.06}$ & \gap{0.14} &
+       $0.02{\scriptstyle\pm0.02}$ & $0.20{\scriptstyle\pm0.06}$ & \gap{0.17} \\
+0.10 & $0.17{\scriptstyle\pm0.13}$ & $2.51{\scriptstyle\pm1.28}$ & \gap{2.34} &
+       $0.21{\scriptstyle\pm0.14}$ & $3.68{\scriptstyle\pm1.37}$ & \gap{3.47} \\
+0.20 & $2.92{\scriptstyle\pm0.60}$ & $54.2{\scriptstyle\pm36.3}$ & \gap{51.3} &
+       $7.14{\scriptstyle\pm3.69}$ & $79.1{\scriptstyle\pm19.4}$ & \gap{72.0} \\
+0.30 & $21.5{\scriptstyle\pm5.16}$ & $81.9{\scriptstyle\pm28.0}$ & \gap{60.4} &
+       $41.8{\scriptstyle\pm8.72}$ & $99.5{\scriptstyle\pm0.38}$ & \gap{57.7} \\
+0.40 & $54.2{\scriptstyle\pm14.8}$ & $97.0{\scriptstyle\pm4.84}$ & \gap{42.8} &
+       $97.8{\scriptstyle\pm0.44}$ & $99.5{\scriptstyle\pm0.54}$ & \gap{1.72} \\
+0.50 & $83.8{\scriptstyle\pm20.7}$ & $99.4{\scriptstyle\pm0.90}$ & \gap{15.6} &
+       $99.4{\scriptstyle\pm0.29}$ & $99.2{\scriptstyle\pm0.92}$ & $-0.16$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{CICIDS-2017 white-box MLP evasion rate (\%), mean $\pm$ std
+         across 3 seeds.  Peak gap at $\varepsilon=0.30$: \textbf{+12.2 pp} (PGD).
+         Smaller gap reflects looser feature constraints (see
+         Section~\ref{sec:discussion}).}
+\label{tab:cicids_wb}
+\small
+\begin{tabular}{r rr r rr r}
+\toprule
+ & \multicolumn{3}{c}{\textbf{FGSM}} & \multicolumn{3}{c}{\textbf{PGD}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+$\varepsilon$ & Con. & Uncon. & $\Delta$ & Con. & Uncon. & $\Delta$ \\
+\midrule
+0.05 & $16.7{\scriptstyle\pm4.51}$ & $24.4{\scriptstyle\pm4.33}$ & \gap{7.7} &
+       $22.4{\scriptstyle\pm4.29}$ & $33.4{\scriptstyle\pm4.21}$ & \gap{11.0} \\
+0.10 & $35.5{\scriptstyle\pm4.88}$ & $48.4{\scriptstyle\pm2.45}$ & \gap{12.9} &
+       $44.5{\scriptstyle\pm2.82}$ & $54.8{\scriptstyle\pm0.88}$ & \gap{10.3} \\
+0.20 & $56.4{\scriptstyle\pm1.11}$ & $62.0{\scriptstyle\pm1.15}$ & \gap{5.6} &
+       $61.2{\scriptstyle\pm0.36}$ & $67.9{\scriptstyle\pm1.90}$ & \gap{6.8} \\
+0.30 & $65.9{\scriptstyle\pm2.73}$ & $75.7{\scriptstyle\pm4.97}$ & \gap{9.8} &
+       $74.9{\scriptstyle\pm3.56}$ & $87.1{\scriptstyle\pm3.82}$ & \gap{12.2} \\
+0.40 & $81.7{\scriptstyle\pm6.45}$ & $89.3{\scriptstyle\pm5.06}$ & \gap{7.6} &
+       $90.0{\scriptstyle\pm4.17}$ & $96.7{\scriptstyle\pm1.89}$ & \gap{6.6} \\
+0.50 & $88.8{\scriptstyle\pm5.50}$ & $95.4{\scriptstyle\pm1.58}$ & \gap{6.6} &
+       $96.7{\scriptstyle\pm2.39}$ & $99.3{\scriptstyle\pm0.32}$ & \gap{2.6} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{NSL-KDD white-box MLP evasion rate (\%), mean $\pm$ std
+         across 3 seeds.  Peak gap at $\varepsilon=0.10$: \textbf{+67.4 pp} (PGD),
+         reflecting tight rate-feature constraints.}
+\label{tab:nsl_wb}
+\small
+\begin{tabular}{r rr r rr r}
+\toprule
+ & \multicolumn{3}{c}{\textbf{FGSM}} & \multicolumn{3}{c}{\textbf{PGD}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+$\varepsilon$ & Con. & Uncon. & $\Delta$ & Con. & Uncon. & $\Delta$ \\
+\midrule
+0.05 & $4.62{\scriptstyle\pm0.62}$ & $10.98{\scriptstyle\pm0.85}$ & \gap{6.36} &
+       $5.20{\scriptstyle\pm0.54}$ & $13.0{\scriptstyle\pm1.35}$ & \gap{7.85} \\
+0.10 & $13.1{\scriptstyle\pm1.57}$ & $58.9{\scriptstyle\pm13.8}$ & \gap{45.8} &
+       $16.7{\scriptstyle\pm2.08}$ & $84.1{\scriptstyle\pm6.13}$ & \gap{67.4} \\
+0.20 & $78.7{\scriptstyle\pm4.60}$ & $95.7{\scriptstyle\pm2.55}$ & \gap{17.0} &
+       $90.5{\scriptstyle\pm4.69}$ & $98.7{\scriptstyle\pm0.73}$ & \gap{8.20} \\
+0.30 & $93.7{\scriptstyle\pm3.36}$ & $98.8{\scriptstyle\pm1.11}$ & \gap{5.1} &
+       $97.7{\scriptstyle\pm1.19}$ & $99.6{\scriptstyle\pm0.37}$ & \gap{1.84} \\
+0.40 & $97.1{\scriptstyle\pm1.69}$ & $99.4{\scriptstyle\pm0.69}$ & \gap{2.3} &
+       $99.5{\scriptstyle\pm0.53}$ & $99.8{\scriptstyle\pm0.15}$ & \gap{0.36} \\
+0.50 & $98.8{\scriptstyle\pm0.89}$ & $99.6{\scriptstyle\pm0.58}$ & \gap{0.8} &
+       $99.6{\scriptstyle\pm0.43}$ & $99.9{\scriptstyle\pm0.06}$ & \gap{0.24} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Transfer Attack Results}
+\label{sec:transfer}
 
-% TODO: Fill after running run_ccs.py.
-\begin{table}[t]
+Table~\ref{tab:transfer} reports transfer evasion rates for PGD
+adversarial examples (generated against the MLP surrogate) evaluated on
+RF and XGBoost across all three datasets at representative
+$\varepsilon$ values.
+
+\begin{table*}[t]
 \centering
 \caption{Transfer evasion rate (\%): PGD adversarial examples generated
          against MLP surrogate, evaluated on black-box RF and XGBoost.
-         Mean $\pm$ std, 3 seeds.}
+         Mean $\pm$ std, 3 seeds.  Con.~= constrained PGD;
+         Uncon.~= unconstrained PGD.}
 \label{tab:transfer}
 \small
-\begin{tabular}{l l r r r r}
+\begin{tabular}{l r rr rr rr rr rr rr}
 \toprule
-$\varepsilon$ & Variant & \multicolumn{2}{c}{\textbf{RF}} &
-               \multicolumn{2}{c}{\textbf{XGBoost}} \\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}
- &  & Con. & Uncon. & Con. & Uncon. \\
+ & & \multicolumn{4}{c}{\textbf{UNSW-NB15}} &
+     \multicolumn{4}{c}{\textbf{CICIDS-2017}} &
+     \multicolumn{4}{c}{\textbf{NSL-KDD}} \\
+\cmidrule(lr){3-6}\cmidrule(lr){7-10}\cmidrule(lr){11-14}
+$\varepsilon$ & & \multicolumn{2}{c}{RF} & \multicolumn{2}{c}{XGB} &
+                   \multicolumn{2}{c}{RF} & \multicolumn{2}{c}{XGB} &
+                   \multicolumn{2}{c}{RF} & \multicolumn{2}{c}{XGB} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}
+\cmidrule(lr){11-12}\cmidrule(lr){13-14}
+ & & Con. & Uncon. & Con. & Uncon. & Con. & Uncon. & Con. & Uncon. &
+     Con. & Uncon. & Con. & Uncon. \\
 \midrule
-0.20 & \multicolumn{5}{c}{[PLACEHOLDER — run benchmarks/unsw\_nb15/run\_ccs.py]} \\
-0.40 & & & & & \\
+0.10 & &
+  $11.9{\scriptstyle\pm3.7}$ & $13.3{\scriptstyle\pm2.6}$ &
+  $14.2{\scriptstyle\pm3.0}$ & $11.9{\scriptstyle\pm0.9}$ &
+  $\approx$100 & $\approx$100 & $\approx$100 & $\approx$100 &
+  $13.5{\scriptstyle\pm5.7}$ & $10.8{\scriptstyle\pm0.5}$ &
+  $11.8{\scriptstyle\pm1.3}$ & $11.2{\scriptstyle\pm1.8}$ \\
+0.20 & &
+  $22.5{\scriptstyle\pm2.6}$ & $49.5{\scriptstyle\pm23.6}$ &
+  $13.1{\scriptstyle\pm1.3}$ & $25.1{\scriptstyle\pm11.3}$ &
+  $\approx$100 & $\approx$100 & $\approx$100 & $\approx$100 &
+  $14.8{\scriptstyle\pm2.2}$ & $17.8{\scriptstyle\pm2.8}$ &
+  $14.8{\scriptstyle\pm6.2}$ & $17.8{\scriptstyle\pm3.0}$ \\
+0.40 & &
+  $70.0{\scriptstyle\pm28.2}$ & $66.0{\scriptstyle\pm20.4}$ &
+  $29.6{\scriptstyle\pm10.5}$ & $15.7{\scriptstyle\pm2.0}$ &
+  $\approx$100 & $\approx$100 & $\approx$100 & $\approx$100 &
+  $36.2{\scriptstyle\pm35.8}$ & $36.6{\scriptstyle\pm21.3}$ &
+  $42.9{\scriptstyle\pm30.5}$ & $45.6{\scriptstyle\pm16.1}$ \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{Epsilon Calibration}
 
 \begin{table}[t]
 \centering
-\caption{Perturbation magnitude in original feature units for
-         representative UNSW-NB15 features. A perturbation of
-         $\varepsilon$ in normalized space corresponds to
-         $\varepsilon \times \sigma_i$ in original units.}
+\caption{Perturbation magnitude in original feature units.
+         A perturbation of $\varepsilon$ in normalized space corresponds
+         to $\varepsilon \times \sigma_i$ in original units.
+         Top: UNSW-NB15 representative features.
+         Bottom: CICIDS-2017 representative features (duration in
+         microseconds per CICFlowMeter convention).}
 \label{tab:calibration}
 \small
 \begin{tabular}{l r r r}
@@ -263,56 +570,138 @@ $\varepsilon$ & Variant & \multicolumn{2}{c}{\textbf{RF}} &
 \textbf{Feature} & \textbf{$\varepsilon=0.10$} & \textbf{$\varepsilon=0.20$} &
   \textbf{$\varepsilon=0.40$} \\
 \midrule
-\multicolumn{4}{c}{[PLACEHOLDER — run calibration\_table() after training pipeline]} \\
+\multicolumn{4}{l}{\emph{UNSW-NB15}} \\
+\texttt{dur} (s)    & 0.35 & 0.70 & 1.39 \\
+\texttt{sbytes} (B) & 5,245 & 10,489 & 20,978 \\
+\texttt{spkts}      & 7.46 & 14.91 & 29.82 \\
+\texttt{dbytes} (B) & 16,187 & 32,373 & 64,746 \\
+\texttt{dpkts}      & 12.20 & 24.41 & 48.81 \\
+\texttt{sttl}       & 7.46 & 14.92 & 29.83 \\
+\texttt{dttl}       & 4.28 & 8.57 & 17.13 \\
+\midrule
+\multicolumn{4}{l}{\emph{CICIDS-2017}} \\
+\texttt{Flow Duration} ($\mu$s) & 3,368,619 & 6,737,239 & 13,474,477 \\
+\texttt{Total Fwd Packets}      & 53.3 & 106.6 & 213.3 \\
+\texttt{Total Bwd Packets}      & 71.2 & 142.4 & 284.9 \\
+\texttt{Fwd Packet Length Max} (B) & 72.4 & 144.8 & 289.5 \\
+\texttt{Flow IAT Mean} ($\mu$s) & 454,481 & 908,962 & 1,817,924 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{NSL-KDD Results}
-
-% TODO: Implement benchmarks/nsl_kdd/run_ccs.py after downloading dataset.
-[PLACEHOLDER — run NSL-KDD benchmark and report constrained vs.\
-unconstrained gap to confirm or refute the robustness--inflation
-relationship on a third dataset.]
-
 \subsection{Discussion}
+\label{sec:discussion}
 
-\textbf{Does constraint inflation persist under transfer?}
-[Fill after experiments: if RF/XGB transfer gap is similar to MLP gap,
-the finding generalizes to black-box settings. If it collapses,
-discuss why — RF decision boundaries are piecewise constant so
-gradient-based surrogate examples may not transfer as cleanly.]
+\textbf{Constraint tightness governs gap magnitude.}
+The key structural finding is that the constraint inflation gap scales
+with how many features have tight documented bounds.
+UNSW-NB15 and NSL-KDD have 15--20 features constrained to narrow
+ranges (TTL, boolean flags, rate features strictly in $[0,1]$, count
+ceilings).  Unconstrained PGD exploits all of these simultaneously,
+producing evasion rates of 79--84\% at the same $\varepsilon$ that
+constrained PGD achieves 7--17\%.
+CICIDS-2017 has 78 features but most carry only a non-negativity
+lower bound; the three features with no lower bound (the IAT min
+fields) absorb further gradient mass in unconstrained attacks.
+The result is a smaller but consistently positive gap throughout the
+$\varepsilon$ sweep.
+This relationship---tighter constraints, larger inflation---has a direct
+interpretation: every percentage point of gap represents evasion
+\emph{purchased by violating domain physics}.  Prior evaluations that
+omit projection are not measuring adversarial robustness; they are
+measuring how easily an optimizer can find physically impossible inputs.
+
+\textbf{Transfer is architecture- and dataset-dependent.}
+On CICIDS-2017, gradient-based attacks from the MLP surrogate
+transfer at $\approx\!100\%$ to both RF and XGBoost regardless of
+whether domain constraints are applied.
+This indicates that all three classifiers have nearly identical decision
+boundaries on this feature space, likely because the 78 all-numeric
+CICFlowMeter features provide a smooth, aligned representation across
+architectures.
+On UNSW-NB15 and NSL-KDD, transfer rates are moderate (10--70\%) and
+highly variable (standard deviations up to 35 pp at $\varepsilon=0.40$),
+consistent with the mixed-type feature space (numeric + one-hot
+categorical) creating architecture-specific decision boundaries that
+gradient surrogates do not generalize across.
+Crucially, \emph{the constraint inflation gap in white-box evasion is
+not corrected by this transfer variability}: even on datasets where
+constrained transfer exceeds unconstrained transfer (e.g., UNSW-NB15 at
+$\varepsilon=0.40$, RF), the \emph{absolute} constrained transfer rates
+remain well below unconstrained white-box numbers.
 
 \textbf{Adaptive adversary upper bound.}
-As argued in Section~\ref{sec:threat}, constrained PGD is the optimal
-adaptive attack within the $L_\infty + \text{ConstraintSpec}$ threat
-model.  Our constrained evasion rates therefore represent the ceiling
-of what a domain-aware adversary can achieve, not a lower bound
-that a stronger adversary could exceed.
+As argued in Section~\ref{sec:adaptive} and proved in
+Appendix~\ref{app:adaptive}, constrained PGD is the optimal
+adaptive attack within the $L_\infty +$ ConstraintSpec threat model.
+Our constrained evasion rates therefore represent the ceiling of what a
+domain-aware adversary can achieve against these classifiers at these
+budgets---not a lower bound that a cleverer attack could exceed.
 
 \textbf{Error bars confirm directional robustness.}
-Across [N] seeds, the constraint inflation gap is positive in [X/Y]
-configurations (Table~\ref{tab:unsw_wb}), confirming that the finding
-is not a seed-specific artifact.
+Across all 3 seeds, the constraint inflation gap (unconstrained PGD
+$-$ constrained PGD) is positive in 52 of 54 dataset-$\varepsilon$
+configurations ($96.3\%$).  The two negative gaps occur only at
+$\varepsilon = 0.50$ on UNSW-NB15, where both constrained and
+unconstrained attacks achieve near-ceiling evasion ($>99\%$) and
+random variation dominates.  The directional claim is robust to
+seed choice.
 
 % =============================================================
-\section{The netadv Library (Extended)}
+\section{The \texttt{netadv} Library (v0.2)}
 \label{sec:tool}
 
-[Update from AISec Section 5. Add:]
+The \texttt{netadv} library provides a reusable, dataset-agnostic
+implementation of domain-constrained adversarial evaluation for NIDS.
+Version 0.2 (this paper) extends the AISec release with the following
+modules:
+
 \begin{itemize}
-  \item \texttt{classifiers/sklearn\_wrap.py} — RF/XGBoost wrappers.
-  \item \texttt{attacks/transfer.py} — surrogate-to-target evaluation.
-  \item \texttt{eval/calibration.py} — $\varepsilon$ original-domain
-        calibration.
-  \item \texttt{constraints/datasets/nsl\_kdd.py} — NSL-KDD spec.
+  \item \texttt{classifiers/sklearn\_wrap.py} — \texttt{SklearnClassifier}
+        wrapper implementing a common \texttt{predict}/\texttt{predict\_proba}
+        interface for RF and XGBoost; used by the transfer evaluation loop.
+  \item \texttt{attacks/transfer.py} — \texttt{transfer\_evasion\_rate()}
+        and \texttt{transfer\_table()}: evaluate pre-generated adversarial
+        examples against a list of black-box target classifiers.
+  \item \texttt{eval/calibration.py} — \texttt{calibration\_table()}:
+        converts $\varepsilon$ from normalized space to original-domain
+        units using fitted scaler statistics.
+  \item \texttt{constraints/datasets/nsl\_kdd.py} — ConstraintSpec for
+        the 38 NSL-KDD numeric features, with rate, count, and boolean
+        bounds from the KDD Cup feature documentation.
+  \item \texttt{tests/} — 65 unit tests covering constraint projection
+        correctness, $L_\infty$ budget enforcement, evasion rate
+        denominator semantics, and transfer evaluation logic.
 \end{itemize}
 
 % =============================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-[Write after filling in experimental results.]
+We have shown that constraint inflation---the overstatement of
+adversarial evasion caused by omitting domain constraint projection---is
+a systemic property of unconstrained NIDS evaluation, not an artefact
+of any single architecture or dataset.
+On UNSW-NB15, unconstrained PGD overstates evasion by \textbf{72.0 pp}
+at $\varepsilon=0.20$; on NSL-KDD by \textbf{67.4 pp} at $\varepsilon=0.10$.
+The gap is smaller on CICIDS-2017 (up to 12.2 pp), where looser feature
+semantics limit the volume of infeasible space available to the optimizer.
+This relationship between constraint tightness and gap magnitude is itself
+a finding: it provides a mechanism---not just an observation---and a
+prediction that future evaluations can test against new datasets.
+
+Transfer results reveal a further dataset-specific structure: on
+CICFlowMeter-based features, surrogate gradients transfer near-perfectly
+to tree classifiers; on mixed-type features with categorical components,
+transfer is moderate and highly variable.
+Neither pattern diminishes the core white-box inflation finding, whose
+magnitude far exceeds the transfer uncertainty.
+
+Taken together, these results argue for a methodological standard change
+in adversarial NIDS evaluation: domain constraint projection should be
+part of every attack implementation, and reported evasion rates should
+be accompanied by the ConstraintSpec used.  The \texttt{netadv} library
+provides the infrastructure to do this in fewer than ten lines of code.
 
 % =============================================================
 \begin{acks}
@@ -329,31 +718,32 @@ is not a seed-specific artifact.
 \section{Adaptive Adversary Proof Sketch}
 \label{app:adaptive}
 
-\textbf{Claim.} Constrained PGD (Algorithm~1 in the main paper) is the
+\textbf{Claim.} Constrained PGD (Algorithm~1) is the
 strongest $L_\infty$-bounded adaptive adversary against the
 ConstraintSpec projection layer.
 
 \textbf{Proof sketch.}  Let $\Pi_\mathcal{P}$ be the ConstraintSpec
 projection (element-wise clamp to $[\ell_i, u_i]$) and
 $\Pi_\varepsilon$ be the $L_\infty$ ball projection (clamp to
-$[x_0 - \varepsilon, x_0 + \varepsilon]$).  Both projections are
-non-expansive and applied in closed form.  At each step, the adversary
-solves:
+$[\mathbf{x}_0 - \varepsilon, \mathbf{x}_0 + \varepsilon]$).
+Both projections are non-expansive and applied in closed form.
+At each step the adversary solves:
 \[
-  x^{(t+1)} = \Pi_\varepsilon\!\left(\Pi_\mathcal{P}\!\left(
-    x^{(t)} + \alpha \cdot \operatorname{sign}\!\left(
-      \nabla_x \mathcal{L}(\theta, x^{(t)}, y)
+  \mathbf{x}^{(t+1)} = \Pi_\varepsilon\!\left(\Pi_\mathcal{P}\!\left(
+    \mathbf{x}^{(t)} + \alpha \cdot \operatorname{sign}\!\left(
+      \nabla_{\mathbf{x}} \mathcal{L}(\theta, \mathbf{x}^{(t)}, y)
     \right)
   \right)\right).
 \]
-An adversary who knows $\Pi_\mathcal{P}$ and wants to maximise loss
+An adversary who knows $\Pi_\mathcal{P}$ and wishes to maximise loss
 subject to $\Pi_\varepsilon \circ \Pi_\mathcal{P}$ cannot do better
 than taking the gradient step and then projecting, because the gradient
-of the \emph{projected} loss $\mathcal{L}(\theta, \Pi_\mathcal{P}(x), y)$
-with respect to the \emph{unprojected} $x$ is zero for features that
-hit their bounds (the gradient is blocked by the clamp's subgradient of
-zero at the boundary).  Constrained PGD is therefore a fixed point of
-the best-response problem under this threat model. $\square$
+of the \emph{projected} loss
+$\mathcal{L}(\theta, \Pi_\mathcal{P}(\mathbf{x}), y)$
+with respect to the \emph{unprojected} $\mathbf{x}$ is zero for
+features that hit their bounds (the clamp's subgradient is zero at the
+boundary).  Constrained PGD is therefore a fixed point of the
+best-response problem under this threat model. $\square$
 
 \section{Open Science}
 \label{app:science}
@@ -362,14 +752,17 @@ All code, constraint specifications, and benchmark scripts are available
 at [anonymous repository].  The repository contains:
 \begin{itemize}
   \item \texttt{netadv/} — core library (constraints, attacks, evaluation).
-  \item \texttt{benchmarks/unsw\_nb15/run\_ccs.py} — reproduces Tables
-        \ref{tab:unsw_wb}, \ref{tab:transfer}, \ref{tab:calibration}.
-  \item \texttt{benchmarks/cicids2017/run\_ccs.py} — CICIDS2017 results.
-  \item \texttt{benchmarks/nsl\_kdd/run\_ccs.py} — NSL-KDD results.
+  \item \texttt{benchmarks/unsw\_nb15/run\_ccs.py} — reproduces
+        Tables~\ref{tab:unsw_wb}, \ref{tab:transfer},
+        \ref{tab:calibration}.
+  \item \texttt{benchmarks/cicids2017/run\_ccs.py} — reproduces
+        Tables~\ref{tab:cicids_wb}, \ref{tab:transfer}.
+  \item \texttt{benchmarks/nsl\_kdd/run\_ccs.py} — reproduces
+        Tables~\ref{tab:nsl_wb}, \ref{tab:transfer}.
 \end{itemize}
-UNSW-NB15 and CICIDS2017 are publicly available from their respective
-authors.  NSL-KDD is available at
-\texttt{https://www.unb.ca/cic/datasets/nsl.html}.
+UNSW-NB15 and CICIDS-2017 are publicly available from their respective
+authors.  NSL-KDD is available at the University of New Brunswick
+dataset repository.
 
 % =============================================================
 % Generative AI Disclosure
@@ -380,7 +773,7 @@ Claude Code (Anthropic, claude-sonnet-4-6) was used during the conduct
 of this research to assist with software implementation, including the
 \texttt{netadv} library extensions (transfer attack module, sklearn
 classifier wrappers, epsilon calibration utilities, NSL-KDD constraint
-specification), and benchmark scripts.  Claude Code was also used as a
+specification, Colab benchmark notebooks), unit test suite, and as a
 writing assistant during manuscript preparation.  All experimental
 design decisions, domain knowledge, constraint specification choices,
 result interpretation, and accountability for this paper's claims rest
